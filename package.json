@@ -1,0 +1,63 @@
+{
+  "name": "ronavi",
+  "version": "0.1.0",
+  "description": "Open-source LLM router that classifies each request and routes it to the cheapest capable model — to manage tokens, extend usage, and cut cost. Library + OpenAI-compatible proxy + CLI.",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "llm",
+    "router",
+    "openai",
+    "anthropic",
+    "openrouter",
+    "ollama",
+    "proxy",
+    "cost",
+    "tokens",
+    "model-routing"
+  ],
+  "author": "onfafanutifafa",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/onfafanutifafa/roNavi.git"
+  },
+  "bin": {
+    "ronavi": "./dist/cli/cli.js"
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./server": {
+      "types": "./dist/server/proxy.d.ts",
+      "import": "./dist/server/proxy.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "ronavi.config.example.json",
+    ".env.example"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test test/*.test.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsup": "^8.3.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "$comment": "Optional config. Everything here has a sensible default — you can delete any key. Prices are USD per 1M tokens and are DEFAULTS you should verify against each provider's current pricing; override them here to keep cost estimates accurate.",
+
+  "classifierModel": "auto",
+
+  "budget": {
+    "limitUSD": 5,
+    "window": "day",
+    "onExceed": "downgrade",
+    "downgradeThreshold": 0.2
+  },
+
+  "autoModelNames": ["auto", "ronavi", "router"],
+
+  "usageFile": "./ronavi.usage.json",
+
+  "providers": {
+    "ollama": {
+      "enabled": true,
+      "baseUrl": "http://localhost:11434"
+    }
+  },
+
+  "models": [
+    {
+      "$comment": "Add or override any model. Matched by id; this replaces the built-in entry with the same id, or adds a new one.",
+      "id": "openrouter:meta-llama/llama-3.3-70b-instruct",
+      "provider": "openrouter",
+      "model": "meta-llama/llama-3.3-70b-instruct",
+      "tier": "small",
+      "inputCostPer1M": 0.12,
+      "outputCostPer1M": 0.3,
+      "contextWindow": 131072,
+      "maxOutput": 8192,
+      "strengths": ["simple_qa", "conversation", "summarization", "code_generation"]
+    }
+  ],
+
+  "tierByTask": {
+    "$comment": "Override the task -> tier mapping if you want. Omit to use defaults.",
+    "code_generation": { "trivial": "small", "low": "small", "medium": "medium", "high": "large" }
+  }
+}
