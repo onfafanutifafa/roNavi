@@ -31,6 +31,15 @@ export function createProxyServer(opts: ProxyOptions = {}): http.Server {
       if (req.method === "GET" && url.pathname === "/v1/models") {
         return json(res, 200, listModels(router));
       }
+      if (req.method === "POST" && url.pathname === "/v1/feedback") {
+        if (opts.apiKey && !authorized(req, opts.apiKey)) {
+          return json(res, 401, errorBody("Unauthorized", "invalid_request_error"));
+        }
+        return await handleFeedback(router, req, res);
+      }
+      if (req.method === "GET" && url.pathname === "/v1/quality") {
+        return json(res, 200, router.getQuality());
+      }
       if (req.method === "POST" && url.pathname === "/v1/route") {
         // Read-only: return the routing decision without proxying upstream.
         if (opts.apiKey && !authorized(req, opts.apiKey)) {
@@ -153,6 +162,21 @@ async function handleRouteOnly(router: Router, req: http.IncomingMessage, res: h
     sessionId: sessionIdFrom(req, body),
   });
   return json(res, 200, decision);
+}
+
+async function handleFeedback(router: Router, req: http.IncomingMessage, res: http.ServerResponse) {
+  const body = await readJson(req);
+  const feedback = { ok: typeof body.ok === "boolean" ? body.ok : undefined, score: numberOr(body.score, undefined) };
+  let applied = false;
+  if (typeof body.session_id === "string") {
+    applied = router.recordFeedback(body.session_id, feedback);
+  } else if (typeof body.model === "string" && typeof body.task === "string") {
+    applied = router.recordFeedback({ model: body.model, task: body.task as never }, feedback);
+  }
+  return json(res, applied ? 200 : 400, {
+    applied,
+    ...(applied ? {} : { error: { message: "Provide session_id, or model + task", type: "invalid_request_error" } }),
+  });
 }
 
 /** undefined = route (auto); otherwise the explicit model to pin to. */

@@ -9,6 +9,7 @@ import type {
   PinningConfig,
   DecisionEvent,
   OtlpConfig,
+  QualityLearningConfig,
 } from "./types.js";
 
 /**
@@ -31,6 +32,8 @@ export interface ResolvedConfig {
   otlp: OtlpConfig | null;
   onDecision: ((event: DecisionEvent) => void) | null;
   alwaysRoute: boolean;
+  quality: QualityLearningConfig;
+  qualityFile: string | null;
   defaultMaxTokens: number;
   verbose: boolean;
 }
@@ -147,6 +150,13 @@ export function resolveConfig(input: RouterConfig = {}): ResolvedConfig {
     otlp,
     onDecision: cfg.onDecision ?? null,
     alwaysRoute: cfg.alwaysRoute ?? (env("RONAVI_ALWAYS_ROUTE") === "1" || env("RONAVI_ALWAYS_ROUTE") === "true"),
+    quality: {
+      enabled: cfg.quality?.enabled ?? true,
+      minSamples: cfg.quality?.minSamples ?? 3,
+      parityThreshold: cfg.quality?.parityThreshold ?? 0.8,
+      demoteThreshold: cfg.quality?.demoteThreshold ?? 0.5,
+    },
+    qualityFile: cfg.qualityFile === null ? null : (cfg.qualityFile ?? "./ronavi.quality.json"),
     defaultMaxTokens: cfg.defaultMaxTokens ?? 1024,
     verbose: cfg.verbose ?? false,
   };

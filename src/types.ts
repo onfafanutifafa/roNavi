@@ -186,6 +186,25 @@ export interface PinningConfig {
   ttlMs: number;
 }
 
+export interface QualityLearningConfig {
+  /** Whether recorded feedback influences routing. */
+  enabled: boolean;
+  /** Minimum feedback samples before a model's score is trusted. */
+  minSamples: number;
+  /** Mean score at/above which a cheaper model is promoted one tier. */
+  parityThreshold: number;
+  /** Mean score below which a model is demoted for that task. */
+  demoteThreshold: number;
+}
+
+/** Feedback about how well a routed model handled a request. */
+export interface FeedbackInput {
+  /** Convenience boolean — true → score 1, false → score 0. */
+  ok?: boolean;
+  /** Explicit quality score in [0,1]; overrides `ok`. */
+  score?: number;
+}
+
 export interface RouterConfig {
   /** Provider credentials. Falls back to env vars when omitted. */
   providers?: ProviderCredentials;
@@ -215,6 +234,10 @@ export interface RouterConfig {
   onDecision?: (event: DecisionEvent) => void;
   /** Proxy: ignore the client's requested model and always route (treat every request as "auto"). */
   alwaysRoute?: boolean;
+  /** Learned-routing settings — feedback demotes underperforming models and promotes cheap-at-parity ones. */
+  quality?: Partial<QualityLearningConfig>;
+  /** Where to persist learned quality scores (null = memory only). */
+  qualityFile?: string | null;
   /** Override the default task -> tier mapping. */
   tierByTask?: Partial<Record<TaskClass, Partial<Record<Complexity, Tier>>>>;
   /** Spend cap + behavior. Omit for no budget enforcement. */

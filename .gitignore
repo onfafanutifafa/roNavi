@@ -11,4 +11,6 @@ dist/
 
 # Local runtime state
 ronavi.usage.json
+ronavi.quality.json
+ronavi.trace.jsonl
 ronavi.config.json

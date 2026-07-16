@@ -12,6 +12,7 @@ import type {
   StreamChunk,
   ProviderName,
   DecisionEvent,
+  FeedbackInput,
 } from "./types.js";
 import { resolveConfig, configuredProviders, type ResolvedConfig } from "./config.js";
 import {
@@ -26,6 +27,7 @@ import { buildProviders, ProviderError, type Provider } from "./providers/index.
 import { classify, heuristicClassify } from "./classifier.js";
 import { EmbeddingClassifier, makeEmbedFn } from "./embeddings.js";
 import { createOtlpExporter } from "./otlp.js";
+import { QualityStore, type QualitySummary } from "./quality.js";
 import { UsageStore, evaluateBudget, BudgetExceededError, type UsageSummary } from "./usage.js";
 import { estimateMessagesTokens, estimateCost, costOf } from "./tokens.js";
 
@@ -105,8 +107,10 @@ export class Router {
   readonly registry: ModelSpec[];
   readonly providers: Record<ProviderName, Provider>;
   readonly usage: UsageStore;
+  readonly quality: QualityStore;
   private readonly tierByTask: typeof DEFAULT_TIER_BY_TASK;
   private readonly sessions: SessionStore;
+  private readonly lastBySession = new Map<string, { model: string; task: TaskClass; ts: number }>();
   private embeddingClassifier: EmbeddingClassifier | null = null;
   private embeddingModel: string | null = null;
   private readonly otlpExport: ((event: DecisionEvent) => void) | null;
@@ -116,6 +120,7 @@ export class Router {
     this.registry = mergeModels(DEFAULT_MODELS, this.config.models).map((m) => ({ enabled: true, ...m }));
     this.providers = buildProviders(this.config);
     this.usage = new UsageStore(this.config.usageFile);
+    this.quality = new QualityStore(this.config.qualityFile);
     this.sessions = new SessionStore(this.config.pinning.ttlMs);
     this.tierByTask = structuredClone(DEFAULT_TIER_BY_TASK);
     for (const [task, byComplexity] of Object.entries(this.config.tierByTask)) {
@@ -226,10 +231,35 @@ export class Router {
     }
 
     const pref = tierPreference(tier);
+    // Learned-routing: an "effective" tier index that promotes cheaper models
+    // proven at-parity on this task, and demotes ones that keep underperforming.
+    const q = this.config.quality;
+    // A model's learned standing on this task: -1 proven at-parity, +1 proven
+    // underperforming, 0 unknown/insufficient data.
+    const learned = (m: ModelSpec): -1 | 0 | 1 => {
+      if (!q.enabled) return 0;
+      const stat = this.quality.stat(classification.task, m.id);
+      if (!stat || stat.n < q.minSamples) return 0;
+      const mean = stat.sum / stat.n;
+      if (mean >= q.parityThreshold) return -1;
+      if (mean < q.demoteThreshold) return 1;
+      return 0;
+    };
+    const effTier = (m: ModelSpec): number => {
+      const base = pref.indexOf(m.tier);
+      const l = learned(m);
+      if (l === -1) return Math.max(0, base - 1); // promote a proven model one tier
+      if (l === 1) return base + 100; // demote a proven-bad model hard
+      return base;
+    };
     const ordered = [...eligible].sort((a, b) => {
-      const ta = pref.indexOf(a.tier);
-      const tb = pref.indexOf(b.tier);
+      const ta = effTier(a);
+      const tb = effTier(b);
       if (ta !== tb) return ta - tb;
+      // Learned feedback outranks the static strength heuristic within a tier.
+      const la = learned(a);
+      const lb = learned(b);
+      if (la !== lb) return la - lb;
       const sa = a.strengths.includes(classification.task) ? 0 : 1;
       const sb = b.strengths.includes(classification.task) ? 0 : 1;
       if (sa !== sb) return sa - sb;
@@ -238,7 +268,12 @@ export class Router {
 
     const primary = ordered[0]!;
     const strengthNote = primary.strengths.includes(classification.task) ? "strength match" : "closest fit";
-    reasonParts.push(`picked ${primary.id} (${strengthNote}${primary.free ? ", free/local" : ""})`);
+    const qMean = this.quality.mean(classification.task, primary.id);
+    const qNote =
+      q.enabled && qMean !== null && (this.quality.stat(classification.task, primary.id)?.n ?? 0) >= q.minSamples
+        ? `, learned quality ${qMean.toFixed(2)}`
+        : "";
+    reasonParts.push(`picked ${primary.id} (${strengthNote}${primary.free ? ", free/local" : ""}${qNote})`);
 
     return {
       classification,
@@ -350,6 +385,7 @@ export class Router {
           sessionId: opts.sessionId,
         });
         this.emitDecision(plan, spec, opts, { costUSD, usage: res.usage, latencyMs });
+        if (opts.sessionId) this.lastBySession.set(opts.sessionId, { model: spec.id, task: plan.classification.task, ts: Date.now() });
         return {
           content: res.content,
           decision: { ...decision, model: spec.id, provider: spec.provider, providerModel: spec.model },
@@ -420,6 +456,7 @@ export class Router {
         }
       })();
 
+      if (opts.sessionId) this.lastBySession.set(opts.sessionId, { model: spec.id, task: plan.classification.task, ts: Date.now() });
       return {
         decision: { ...decision, model: spec.id, provider: spec.provider, providerModel: spec.model },
         stream,
@@ -486,5 +523,47 @@ export class Router {
 
   getUsage(): UsageSummary {
     return this.usage.summary(this.config.budget);
+  }
+
+  getQuality(): QualitySummary {
+    return this.quality.summary();
+  }
+
+  /**
+   * Record feedback on how well a routed model handled a request. Over time this
+   * demotes models that underperform on a task and promotes cheaper models that
+   * prove at-parity. `target` can be a sessionId, a completion/decision object,
+   * or an explicit `{ model, task }`.
+   */
+  recordFeedback(
+    target: string | { model: string; task: TaskClass } | RouteDecision | RouterCompletion,
+    feedback: FeedbackInput,
+  ): boolean {
+    const resolved = this.resolveFeedbackTarget(target);
+    if (!resolved) return false;
+    const score = feedback.score !== undefined ? feedback.score : feedback.ok ? 1 : 0;
+    this.quality.record(resolved.task, resolved.model, score);
+    return true;
+  }
+
+  private resolveFeedbackTarget(
+    target: string | { model: string; task: TaskClass } | RouteDecision | RouterCompletion,
+  ): { model: string; task: TaskClass } | null {
+    if (typeof target === "string") {
+      const last = this.lastBySession.get(target);
+      return last ? { model: last.model, task: last.task } : null;
+    }
+    if ("classification" in target && typeof target.model === "string") {
+      // RouteDecision
+      return { model: target.model, task: target.classification.task };
+    }
+    if ("decision" in target && typeof target.model === "string") {
+      // RouterCompletion
+      return { model: target.model, task: target.decision.classification.task };
+    }
+    if ("model" in target && "task" in target) {
+      return { model: target.model, task: target.task };
+    }
+    return null;
   }
 }

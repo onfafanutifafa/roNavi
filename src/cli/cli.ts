@@ -24,6 +24,8 @@ Usage:
                                (targets: claude-code, cursor, codex, openai)
   ronavi models                List routable models and which providers are configured
   ronavi usage                 Show accumulated usage and spend
+  ronavi quality               Show learned per-task model quality from feedback
+  ronavi feedback ...          Record feedback (--model <id> --task <t> --ok|--bad|--score <n>)
 
 Options:
   --model <id>        Force a specific model (skip routing), e.g. anthropic:claude-haiku-4-5
@@ -50,7 +52,7 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
 
   if (args.flags["help"] || args.flags["h"]) return void console.log(HELP);
-  if (args.flags["version"]) return void console.log("ronavi 0.3.0");
+  if (args.flags["version"]) return void console.log("ronavi 0.4.0");
 
   const config = {
     verbose: Boolean(args.flags["verbose"]),
@@ -69,6 +71,10 @@ async function main() {
       return models(router, args);
     case "usage":
       return usage(router, args);
+    case "quality":
+      return quality(router, args);
+    case "feedback":
+      return feedback(router, args);
     case "route":
       return route(router, args, await gatherPrompt(args, true));
     default:
@@ -234,6 +240,39 @@ function usage(router: Router, args: Args) {
   }
 }
 
+function quality(router: Router, args: Args) {
+  const s = router.getQuality();
+  if (args.flags["json"]) return void console.log(JSON.stringify(s, null, 2));
+  const rows = Object.entries(s.byTaskModel);
+  if (rows.length === 0) {
+    console.log("No learned quality yet. Record feedback with:  ronavi feedback --model <id> --task <task> --ok|--bad");
+    return;
+  }
+  console.log("Learned quality (mean score by task → model):");
+  for (const [k, v] of rows.sort((a, b) => b[1].mean - a[1].mean)) {
+    console.log(`  ${pad(k, 52)} ${v.mean.toFixed(2)}  (${v.samples} sample${v.samples === 1 ? "" : "s"})`);
+  }
+}
+
+function feedback(router: Router, args: Args) {
+  const fb = args.flags["score"]
+    ? { score: Number(args.flags["score"]) }
+    : args.flags["bad"]
+      ? { ok: false }
+      : { ok: true };
+  let applied = false;
+  if (typeof args.flags["session"] === "string") {
+    applied = router.recordFeedback(args.flags["session"], fb);
+    if (!applied) console.error("Session not found in this process (sessions are in-memory). Use --model + --task instead.");
+  } else if (typeof args.flags["model"] === "string" && typeof args.flags["task"] === "string") {
+    applied = router.recordFeedback({ model: args.flags["model"], task: args.flags["task"] as never }, fb);
+  } else {
+    console.log("Usage: ronavi feedback --model <id> --task <task> [--ok | --bad | --score <0-1>]");
+    return;
+  }
+  console.log(applied ? `Recorded feedback (${JSON.stringify(fb)}).` : "No feedback recorded.");
+}
+
 // ── helpers ───────────────────────────────────────────────────────────
 
 function routeOptions(args: Args) {
@@ -291,7 +330,7 @@ function readStdin(): Promise<string> {
 }
 
 function parseArgs(argv: string[]): Args {
-  const commands = new Set(["serve", "models", "usage", "route", "patch"]);
+  const commands = new Set(["serve", "models", "usage", "route", "patch", "quality", "feedback"]);
   const flags: Record<string, string | boolean> = {};
   const positionals: string[] = [];
   let command = "";
@@ -319,7 +358,7 @@ function parseArgs(argv: string[]): Args {
 }
 
 function isBooleanFlag(key: string): boolean {
-  return ["stream", "json", "verbose", "help", "version", "always-route", "write"].includes(key);
+  return ["stream", "json", "verbose", "help", "version", "always-route", "write", "ok", "bad"].includes(key);
 }
 
 function pad(s: string, n: number): string {

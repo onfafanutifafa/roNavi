@@ -15,6 +15,9 @@
 
   "pinning": { "enabled": true, "ttlMs": 1800000 },
 
+  "quality": { "enabled": true, "minSamples": 3, "parityThreshold": 0.8, "demoteThreshold": 0.5 },
+  "qualityFile": "./ronavi.quality.json",
+
   "autoModelNames": ["auto", "ronavi", "router"],
 
   "usageFile": "./ronavi.usage.json",

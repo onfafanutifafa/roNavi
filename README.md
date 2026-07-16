@@ -320,6 +320,22 @@ const router = new Router({
 });
 ```
 
+## Learned routing (feedback)
+
+Static tiers get you most of the way; feedback closes the loop. Tell roNavi how a routed model actually did, and it **learns per task**: models that keep underperforming get demoted, and cheaper models that prove *at parity* on a task get promoted — so you converge on the cheapest model that's actually good enough for each kind of request.
+
+```ts
+const result = await router.complete(messages, { sessionId: "conv-1" });
+// ... your app or user judges the answer ...
+router.recordFeedback(result, { ok: true });        // or { score: 0.9 }, or { ok: false }
+router.recordFeedback("conv-1", { ok: false });      // by session id
+router.recordFeedback({ model: "openai:gpt-4o", task: "code_generation" }, { score: 0.4 });
+```
+
+Via the proxy: `POST /v1/feedback` with `{ "session_id": "...", "ok": true }` (or `{ "model", "task", "score" }`); inspect what's been learned with `GET /v1/quality` or `ronavi quality`. Scores persist to `qualityFile` (default `./ronavi.quality.json`) so learning survives restarts. Tune or disable via `quality: { enabled, minSamples, parityThreshold, demoteThreshold }`.
+
+> Honest scope: this is a lightweight, transparent heuristic (a rolling mean per task→model with promote/demote thresholds), not a trained model. It gets better with your traffic; it doesn't ship pre-trained.
+
 ## Providers
 
 | Provider | Env / config | Role in routing |
