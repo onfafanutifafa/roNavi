@@ -18,6 +18,8 @@ export {
 
 export { estimateTokens, estimateMessagesTokens, estimateCost, costOf, formatUSD } from "./tokens.js";
 export { classify, heuristicClassify } from "./classifier.js";
+export { EmbeddingClassifier, makeEmbedFn, TASK_SEEDS } from "./embeddings.js";
+export type { EmbedFn } from "./embeddings.js";
 export { UsageStore, evaluateBudget, BudgetExceededError } from "./usage.js";
 export type { UsageRecord, UsageSummary, BudgetState } from "./usage.js";
 export { resolveConfig, configuredProviders } from "./config.js";
@@ -43,6 +45,9 @@ export type {
   BudgetWindow,
   BudgetAction,
   ProviderCredentials,
+  ClassifierMode,
+  DecisionEvent,
+  PinningConfig,
 } from "./types.js";
 
 export { TIER_ORDER, TASK_CLASSES, COMPLEXITIES } from "./types.js";

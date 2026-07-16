@@ -1,6 +1,9 @@
 {
   "$comment": "Optional config. Everything here has a sensible default — you can delete any key. Prices are USD per 1M tokens and are DEFAULTS you should verify against each provider's current pricing; override them here to keep cost estimates accurate.",
 
+  "classifier": "llm",
+  "classifierThreshold": 0.55,
+  "embeddingModel": "auto",
   "classifierModel": "auto",
 
   "budget": {
@@ -10,9 +13,12 @@
     "downgradeThreshold": 0.2
   },
 
+  "pinning": { "enabled": true, "ttlMs": 1800000 },
+
   "autoModelNames": ["auto", "ronavi", "router"],
 
   "usageFile": "./ronavi.usage.json",
+  "traceFile": null,
 
   "providers": {
     "ollama": {

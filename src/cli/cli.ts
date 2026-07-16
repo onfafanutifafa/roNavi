@@ -23,6 +23,7 @@ Usage:
 Options:
   --model <id>        Force a specific model (skip routing), e.g. anthropic:claude-haiku-4-5
   --tier <t>          Force a tier: nano | small | medium | large
+  --session <id>      Pin this conversation to its first routing decision
   --stream            Stream the answer token-by-token
   --max-tokens <n>    Max output tokens (default 1024)
   --temperature <n>   Sampling temperature
@@ -33,6 +34,7 @@ Options:
   -h, --help          Show this help
   --version           Show version
 
+Classifier mode is set via config or $RONAVI_CLASSIFIER (llm | heuristic | hybrid | embedding).
 Reads piped stdin as additional context, e.g.:  ronavi "summarize" < notes.txt
 `;
 
@@ -40,7 +42,7 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
 
   if (args.flags["help"] || args.flags["h"]) return void console.log(HELP);
-  if (args.flags["version"]) return void console.log("ronavi 0.1.0");
+  if (args.flags["version"]) return void console.log("ronavi 0.2.0");
 
   const config = {
     verbose: Boolean(args.flags["verbose"]),
@@ -94,7 +96,7 @@ async function route(router: Router, args: Args, messages: Message[]) {
   }
   console.log(`task:        ${decision.classification.task} (${decision.classification.complexity}, ${decision.classification.source})`);
   console.log(`tier:        ${decision.tier}`);
-  console.log(`model:       ${decision.model}  [${decision.provider}]`);
+  console.log(`model:       ${decision.model}  [${decision.provider}]${decision.pinned ? "  (pinned)" : ""}`);
   console.log(`est. cost:   ${formatUSD(decision.estCostUSD)}`);
   console.log(`fallbacks:   ${decision.fallbacks.slice(0, 4).join(", ") || "(none)"}`);
   console.log(`reason:      ${decision.reason}`);
@@ -165,6 +167,7 @@ function routeOptions(args: Args) {
     forceTier: typeof args.flags["tier"] === "string" ? (args.flags["tier"] as Tier) : undefined,
     maxTokens: args.flags["max-tokens"] ? Number(args.flags["max-tokens"]) : undefined,
     temperature: args.flags["temperature"] ? Number(args.flags["temperature"]) : undefined,
+    sessionId: typeof args.flags["session"] === "string" ? args.flags["session"] : undefined,
   };
 }
 
@@ -188,12 +191,27 @@ function readStdin(): Promise<string> {
   return new Promise((resolve) => {
     if (process.stdin.isTTY) return resolve("");
     let data = "";
+    let done = false;
+    // Pause stdin once we're finished so its handle stops keeping the process
+    // alive — otherwise the CLI prints its answer but never exits.
+    const finish = (v: string) => {
+      if (done) return;
+      done = true;
+      try {
+        process.stdin.pause();
+      } catch {
+        /* ignore */
+      }
+      resolve(v);
+    };
     process.stdin.setEncoding("utf8");
     process.stdin.on("data", (c) => (data += c));
-    process.stdin.on("end", () => resolve(data.trim()));
-    process.stdin.on("error", () => resolve(""));
-    // Guard: if nothing arrives quickly on a non-TTY with no pipe, don't hang.
-    setTimeout(() => resolve(data.trim()), 50).unref?.();
+    process.stdin.on("end", () => finish(data.trim())); // real piped input: read to the end
+    process.stdin.on("error", () => finish(""));
+    // If nothing has arrived shortly, stdin isn't really piped — don't block.
+    setTimeout(() => {
+      if (data === "") finish("");
+    }, 120).unref?.();
   });
 }
 

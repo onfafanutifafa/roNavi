@@ -30,6 +30,13 @@ export function createProxyServer(opts: ProxyOptions = {}): http.Server {
       if (req.method === "GET" && url.pathname === "/v1/models") {
         return json(res, 200, listModels(router));
       }
+      if (req.method === "POST" && url.pathname === "/v1/route") {
+        // Read-only: return the routing decision without proxying upstream.
+        if (opts.apiKey && !authorized(req, opts.apiKey)) {
+          return json(res, 401, errorBody("Unauthorized", "invalid_request_error"));
+        }
+        return await handleRouteOnly(router, req, res);
+      }
       if (req.method === "POST" && url.pathname === "/v1/chat/completions") {
         if (opts.apiKey && !authorized(req, opts.apiKey)) {
           return json(res, 401, errorBody("Unauthorized", "invalid_request_error"));
@@ -68,6 +75,7 @@ async function handleChatCompletion(router: Router, req: http.IncomingMessage, r
     model: isAuto ? undefined : requestedModel,
     maxTokens: numberOr(body.max_tokens, numberOr(body.max_completion_tokens, undefined)),
     temperature: numberOr(body.temperature, undefined),
+    sessionId: sessionIdFrom(req, body),
   };
 
   const stream = body.stream === true;
@@ -125,6 +133,29 @@ async function handleChatCompletion(router: Router, req: http.IncomingMessage, r
   });
 }
 
+async function handleRouteOnly(router: Router, req: http.IncomingMessage, res: http.ServerResponse) {
+  const body = await readJson(req);
+  const messages = normalizeMessages(body.messages);
+  if (messages.length === 0) {
+    return json(res, 400, errorBody("`messages` is required", "invalid_request_error"));
+  }
+  const requestedModel = typeof body.model === "string" ? body.model : "auto";
+  const isAuto = router.config.autoModelNames.includes(requestedModel) || requestedModel === "";
+  const decision = await router.route(messages, {
+    model: isAuto ? undefined : requestedModel,
+    sessionId: sessionIdFrom(req, body),
+  });
+  return json(res, 200, decision);
+}
+
+/** Derive a session id from the X-Session-Id header or the OpenAI `user` field. */
+function sessionIdFrom(req: http.IncomingMessage, body: Record<string, any>): string | undefined {
+  const header = req.headers["x-session-id"];
+  if (typeof header === "string" && header.trim()) return header.trim();
+  if (typeof body.user === "string" && body.user.trim()) return body.user.trim();
+  return undefined;
+}
+
 function normalizeMessages(raw: unknown): Message[] {
   if (!Array.isArray(raw)) return [];
   const out: Message[] = [];
@@ -160,12 +191,16 @@ function listModels(router: Router) {
   return { object: "list", data };
 }
 
-function setRouterHeaders(res: http.ServerResponse, decision: { model: string; provider: string; tier: string; classification: { task: string }; estCostUSD: number }) {
+function setRouterHeaders(
+  res: http.ServerResponse,
+  decision: { model: string; provider: string; tier: string; classification: { task: string }; estCostUSD: number; pinned: boolean },
+) {
   res.setHeader("X-Router-Model", decision.model);
   res.setHeader("X-Router-Provider", decision.provider);
   res.setHeader("X-Router-Tier", decision.tier);
   res.setHeader("X-Router-Task", decision.classification.task);
   res.setHeader("X-Router-Est-Cost", decision.estCostUSD.toFixed(6));
+  res.setHeader("X-Router-Pinned", String(decision.pinned));
 }
 
 function streamChunk(

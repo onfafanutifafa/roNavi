@@ -24,6 +24,7 @@ function stubbedRouter(): Router {
       estCostUSD: 0.0001,
       reason: "stubbed",
       fallbacks: [],
+      pinned: false,
     },
     model: "anthropic:claude-haiku-4-5",
     provider: "anthropic",

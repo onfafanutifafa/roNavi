@@ -73,13 +73,16 @@ export interface ModelSpec {
   enabled?: boolean;
 }
 
+/** How a request is classified. See {@link RouterConfig.classifier}. */
+export type ClassifierMode = "llm" | "heuristic" | "hybrid" | "embedding";
+
 export interface Classification {
   task: TaskClass;
   complexity: Complexity;
   needsLongContext: boolean;
   confidence: number;
-  /** "llm" when produced by the classifier model, "fallback" when the classifier failed. */
-  source: "llm" | "fallback";
+  /** Which strategy produced this label. */
+  source: "llm" | "heuristic" | "embedding" | "fallback" | "pinned";
 }
 
 export interface TokenUsage {
@@ -99,6 +102,29 @@ export interface RouteDecision {
   reason: string;
   /** Ordered fallback model ids tried if the primary provider errors. */
   fallbacks: string[];
+  /** True when this decision was reused from a pinned session (no classification ran). */
+  pinned: boolean;
+}
+
+/** A telemetry event emitted for each routed request (see {@link RouterConfig.onDecision}). */
+export interface DecisionEvent {
+  ts: number;
+  sessionId?: string;
+  model: string;
+  provider: ProviderName;
+  tier: Tier;
+  task: TaskClass;
+  complexity: Complexity;
+  classifierMode: ClassifierMode;
+  pinned: boolean;
+  reason: string;
+  estCostUSD: number;
+  /** Populated after generation. */
+  costUSD?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  /** Total wall-clock time for classify + generate, in ms. */
+  latencyMs?: number;
 }
 
 /** A completed (non-streaming) routed generation. */
@@ -142,13 +168,38 @@ export interface ProviderCredentials {
   ollama?: { enabled?: boolean; baseUrl?: string };
 }
 
+export interface PinningConfig {
+  /** Reuse a session's first routing decision on later turns. */
+  enabled: boolean;
+  /** How long a pin lives, in ms (default 30 min). */
+  ttlMs: number;
+}
+
 export interface RouterConfig {
   /** Provider credentials. Falls back to env vars when omitted. */
   providers?: ProviderCredentials;
   /** Extra or overriding model specs (matched by id). */
   models?: Partial<ModelSpec>[];
-  /** Which model classifies requests. "auto" = cheapest configured model. */
+  /**
+   * How each request is classified:
+   * - "llm" (default): a cheap model tags the task — most accurate, adds a call.
+   * - "heuristic": instant rule-based classification — zero cost/latency.
+   * - "hybrid": heuristics first, escalate to the LLM only when uncertain.
+   * - "embedding": embed the request and score against per-task centroids (near-zero cost with a local embed model).
+   */
+  classifier?: ClassifierMode;
+  /** In "hybrid" mode, escalate to the LLM classifier below this confidence (default 0.55). */
+  classifierThreshold?: number;
+  /** Embedding model for "embedding" mode, e.g. "ollama:nomic-embed-text" or "openai:text-embedding-3-small". */
+  embeddingModel?: string;
+  /** Which model classifies requests in "llm"/"hybrid" mode. "auto" = cheapest configured model. */
   classifierModel?: string;
+  /** Pin a conversation to its first routing decision to keep provider prompt caches warm. */
+  pinning?: Partial<PinningConfig>;
+  /** Append one JSON line of decision telemetry per request to this file. */
+  traceFile?: string | null;
+  /** Called with a {@link DecisionEvent} after each routed request completes. */
+  onDecision?: (event: DecisionEvent) => void;
   /** Override the default task -> tier mapping. */
   tierByTask?: Partial<Record<TaskClass, Partial<Record<Complexity, Tier>>>>;
   /** Spend cap + behavior. Omit for no budget enforcement. */

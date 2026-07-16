@@ -10,6 +10,10 @@ export interface UsageRecord {
   inputTokens: number;
   outputTokens: number;
   costUSD: number;
+  /** Total wall-clock time for classify + generate, in ms. */
+  latencyMs?: number;
+  /** Session id, when pinning is in use. */
+  sessionId?: string;
 }
 
 export interface UsageSummary {

@@ -95,25 +95,32 @@ export function heuristicClassify(messages: Message[]): Omit<Classification, "so
   const tokens = estimateMessagesTokens(messages);
   const hasCode = /```|function\s|def\s|class\s|=>|import\s|const\s|;\s*$/.test(lastUser);
 
+  // `strong` = a confident signal fired; used to gate hybrid escalation.
   let task: TaskClass = "simple_qa";
+  let strong = false;
   if (hasCode || /\b(code|bug|refactor|implement|function|api|regex)\b/.test(text)) {
     task = /\b(review|bug|fix|debug|why does|what's wrong)\b/.test(text) ? "code_review" : "code_generation";
-  } else if (/\b(summar|tl;?dr|shorten)\b/.test(text)) task = "summarization";
-  else if (/\b(translate|translation|in (french|spanish|german|chinese))\b/.test(text)) task = "translation";
-  else if (/\b(extract|parse|pull out|list the)\b/.test(text)) task = "extraction";
-  else if (/\b(classify|categor|label|sentiment)\b/.test(text)) task = "classification";
-  else if (/\b(prove|calculate|equation|solve for|integral|derivative)\b/.test(text)) task = "math";
-  else if (/\b(write (a|an) (story|poem|essay)|creative|imagine)\b/.test(text)) task = "creative_writing";
-  else if (/\b(plan|step by step|analyze|design|architect|reason|strategy)\b/.test(text)) task = "reasoning";
+    strong = true;
+  } else if (/\b(summar|tl;?dr|shorten)\b/.test(text)) { task = "summarization"; strong = true; }
+  else if (/\b(translate|translation|in (french|spanish|german|chinese))\b/.test(text)) { task = "translation"; strong = true; }
+  else if (/\b(extract|parse|pull out|list the)\b/.test(text)) { task = "extraction"; strong = true; }
+  else if (/\b(classify|categor|label|sentiment)\b/.test(text)) { task = "classification"; strong = true; }
+  else if (/\b(prove|calculate|equation|solve for|integral|derivative)\b/.test(text)) { task = "math"; strong = true; }
+  else if (/\b(write (a|an) (story|poem|essay)|creative|imagine)\b/.test(text)) { task = "creative_writing"; strong = true; }
+  else if (/\b(plan|step by step|analyze|design|architect|reason|strategy)\b/.test(text)) { task = "reasoning"; strong = true; }
 
   let complexity: Complexity = "low";
   const words = lastUser.trim().split(/\s+/).length;
-  if (words <= 8 && tokens < 60) complexity = "trivial";
+  const veryShort = words <= 8 && tokens < 60;
+  if (veryShort) complexity = "trivial";
   else if (words > 120 || tokens > 1500) complexity = "high";
   else if (words > 40 || tokens > 400) complexity = "medium";
   if (task === "reasoning" || task === "math") {
     complexity = complexity === "trivial" ? "low" : complexity === "low" ? "medium" : complexity;
   }
 
-  return { task, complexity, needsLongContext: tokens > 8000, confidence: 0.35 };
+  // High confidence when a keyword/code signal fired or the request is clearly
+  // a trivial one-liner; low otherwise (so hybrid mode escalates the ambiguous ones).
+  const confidence = strong ? 0.8 : veryShort ? 0.7 : 0.4;
+  return { task, complexity, needsLongContext: tokens > 8000, confidence };
 }

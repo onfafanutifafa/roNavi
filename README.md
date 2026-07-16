@@ -254,6 +254,49 @@ If the classifier call fails or returns junk, a built-in heuristic classifier ta
 
 ---
 
+## Routing modes (classifier strategies)
+
+The classifier is how roNavi decides task + difficulty. Pick the cost/latency/accuracy tradeoff via `classifier` in config (or `$RONAVI_CLASSIFIER`):
+
+| Mode | How it classifies | Cost / latency per request | Best for |
+|---|---|---|---|
+| `llm` (default) | A cheap model tags the task | one small model call | Highest accuracy on novel/ambiguous prompts |
+| `heuristic` | Rule-based (keywords, code detection, length) | **zero** — instant, offline | Latency-critical, fully offline, no per-request cost |
+| `hybrid` | Heuristic first; escalate to the LLM only when uncertain | ~zero for clear-cut requests | The pragmatic default for cost — most traffic skips the LLM call |
+| `embedding` | Embed the request, score against per-task centroids | one embedding call (near-free with local `nomic-embed-text`) | Fast, cheap, no keyword brittleness |
+
+`embedding` mode mirrors the "embed request → score against frozen intent clusters" approach: the built-in per-task seed phrases *are* the clusters (no training). It defaults to a local Ollama embedding model (free) and falls back to the heuristic if no embedding backend is available.
+
+```jsonc
+{ "classifier": "hybrid" }                       // cheapest sensible default
+{ "classifier": "embedding", "embeddingModel": "ollama:nomic-embed-text" }
+```
+
+## Session pinning
+
+For multi-turn / agent traffic, switching models mid-conversation throws away the provider's **prompt cache** — often costing more than routing saves. With pinning on (default), the **first** decision for a `sessionId` is reused for the rest of the conversation:
+
+```ts
+await router.complete(turn1, { sessionId: "conv-42" }); // classifies, picks a model, pins it
+await router.complete(turn2, { sessionId: "conv-42" }); // reuses that model — cache stays warm
+```
+
+Via the proxy, pass the session through the `X-Session-Id` header (or the OpenAI `user` field). Responses report `X-Router-Pinned: true|false`. Configure with `pinning: { enabled, ttlMs }`; pass `repin: true` to force a fresh decision.
+
+## Observability & telemetry
+
+- **Decision endpoint** — `POST /v1/route` returns the routing decision (model, provider, tier, task, reason, `pinned`) **without** generating anything. Same body as `/v1/chat/completions`.
+- **Response headers** on every proxied call — `X-Router-Model`, `X-Router-Provider`, `X-Router-Tier`, `X-Router-Task`, `X-Router-Est-Cost`, `X-Router-Pinned`; plus an `x_ronavi` object in the JSON body.
+- **Per-request telemetry** — set `traceFile` to append one JSON line per request (model, tier, task, cost, tokens, latency, pinned), or pass an `onDecision(event)` hook to the `Router` to forward events anywhere (your logger, an OTLP collector, a DB).
+- **Spend/usage** — `ronavi usage` and `router.getUsage()` summarize cost and tokens by model and task.
+
+```ts
+const router = new Router({
+  traceFile: "./ronavi.trace.jsonl",
+  onDecision: (e) => metrics.record(e), // { model, tier, task, costUSD, latencyMs, pinned, ... }
+});
+```
+
 ## Providers
 
 | Provider | Env / config | Role in routing |
@@ -275,13 +318,18 @@ See [`ronavi.config.example.json`](./ronavi.config.example.json). Common keys:
 
 ```jsonc
 {
-  "classifierModel": "auto",              // "auto" = cheapest configured model
+  "classifier": "llm",                    // llm | heuristic | hybrid | embedding  (see "Routing modes")
+  "classifierThreshold": 0.55,            // hybrid: escalate to the LLM below this confidence
+  "embeddingModel": "auto",               // embedding mode: "auto" | "ollama:nomic-embed-text" | "openai:text-embedding-3-small"
+  "classifierModel": "auto",              // llm/hybrid: "auto" = cheapest configured model
   "budget": {
     "limitUSD": 5,
     "window": "day",                      // hour | day | month | total
     "onExceed": "downgrade",              // downgrade | block
     "downgradeThreshold": 0.2             // start biasing cheaper at 20% remaining
   },
+  "pinning": { "enabled": true, "ttlMs": 1800000 },  // keep a conversation on one model (prompt-cache safe)
+  "traceFile": "./ronavi.trace.jsonl",    // one decision-telemetry JSON line per request (optional)
   "usageFile": "./ronavi.usage.json",     // persist spend across runs (null = memory only)
   "providers": { "ollama": { "enabled": true, "baseUrl": "http://localhost:11434" } },
   "models": [ /* add or override model specs, matched by id */ ],

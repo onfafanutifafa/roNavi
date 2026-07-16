@@ -5,6 +5,9 @@ import type {
   BudgetConfig,
   BudgetWindow,
   ModelSpec,
+  ClassifierMode,
+  PinningConfig,
+  DecisionEvent,
 } from "./types.js";
 
 /**
@@ -14,11 +17,17 @@ import type {
 export interface ResolvedConfig {
   providers: Required<ProviderCredentials>;
   models: Partial<ModelSpec>[];
+  classifier: ClassifierMode;
+  classifierThreshold: number;
+  embeddingModel: string;
   classifierModel: string;
   tierByTask: NonNullable<RouterConfig["tierByTask"]>;
   budget: BudgetConfig | null;
   autoModelNames: string[];
   usageFile: string | null;
+  pinning: PinningConfig;
+  traceFile: string | null;
+  onDecision: ((event: DecisionEvent) => void) | null;
   defaultMaxTokens: number;
   verbose: boolean;
 }
@@ -103,11 +112,20 @@ export function resolveConfig(input: RouterConfig = {}): ResolvedConfig {
   return {
     providers,
     models: cfg.models ?? [],
+    classifier: (env("RONAVI_CLASSIFIER") as ClassifierMode) ?? cfg.classifier ?? "llm",
+    classifierThreshold: cfg.classifierThreshold ?? 0.55,
+    embeddingModel: env("RONAVI_EMBEDDING_MODEL") ?? cfg.embeddingModel ?? "auto",
     classifierModel: env("RONAVI_CLASSIFIER_MODEL") ?? cfg.classifierModel ?? "auto",
     tierByTask: cfg.tierByTask ?? {},
     budget,
     autoModelNames: cfg.autoModelNames ?? ["auto", "ronavi", "router"],
     usageFile: cfg.usageFile === null ? null : (cfg.usageFile ?? "./ronavi.usage.json"),
+    pinning: {
+      enabled: cfg.pinning?.enabled ?? true,
+      ttlMs: cfg.pinning?.ttlMs ?? 30 * 60 * 1000,
+    },
+    traceFile: cfg.traceFile ?? null,
+    onDecision: cfg.onDecision ?? null,
     defaultMaxTokens: cfg.defaultMaxTokens ?? 1024,
     verbose: cfg.verbose ?? false,
   };
