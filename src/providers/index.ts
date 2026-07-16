@@ -36,5 +36,13 @@ export function buildProviders(cfg: ResolvedConfig): Record<ProviderName, Provid
       // Ollama's OpenAI endpoint doesn't accept stream_options; estimate usage.
       requestStreamUsage: false,
     }),
+    google: new OpenAICompatibleProvider({
+      name: "google",
+      // Gemini's OpenAI-compatible endpoint.
+      baseUrl: cfg.providers.google.baseUrl ?? "https://generativelanguage.googleapis.com/v1beta/openai",
+      apiKey: cfg.providers.google.apiKey,
+      // Gemini's OpenAI shim doesn't accept stream_options; estimate usage.
+      requestStreamUsage: false,
+    }),
   };
 }

@@ -20,6 +20,7 @@ export { estimateTokens, estimateMessagesTokens, estimateCost, costOf, formatUSD
 export { classify, heuristicClassify } from "./classifier.js";
 export { EmbeddingClassifier, makeEmbedFn, TASK_SEEDS } from "./embeddings.js";
 export type { EmbedFn } from "./embeddings.js";
+export { buildOtlpPayload, createOtlpExporter } from "./otlp.js";
 export { UsageStore, evaluateBudget, BudgetExceededError } from "./usage.js";
 export type { UsageRecord, UsageSummary, BudgetState } from "./usage.js";
 export { resolveConfig, configuredProviders } from "./config.js";
@@ -48,6 +49,7 @@ export type {
   ClassifierMode,
   DecisionEvent,
   PinningConfig,
+  OtlpConfig,
 } from "./types.js";
 
 export { TIER_ORDER, TASK_CLASSES, COMPLEXITIES } from "./types.js";

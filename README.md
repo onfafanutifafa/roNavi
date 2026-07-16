@@ -155,6 +155,27 @@ Every response also carries routing info in headers — `X-Router-Model`, `X-Rou
 
 You can still pin a model explicitly by passing its id instead of `"auto"` (e.g. `"anthropic:claude-haiku-4-5"`), and the proxy routes it straight to that model.
 
+### Also speaks the Anthropic API — route Claude Code & the Anthropic SDK
+
+The proxy exposes an **Anthropic-compatible `POST /v1/messages`** endpoint too, so tools built on the Anthropic API (Claude Code, the `@anthropic-ai/sdk`) route through roNavi just by changing their base URL:
+
+```bash
+ronavi serve --always-route            # route every request, whatever model the tool asks for
+export ANTHROPIC_BASE_URL=http://localhost:8787
+export ANTHROPIC_API_KEY=ronavi        # any non-empty value; roNavi uses its own provider keys
+claude                                  # Claude Code now routes through roNavi
+```
+
+`ronavi patch <target>` prints the exact wiring for common tools (and `--write` sets up Claude Code's `~/.claude/settings.json` for you):
+
+```bash
+ronavi patch claude-code --url http://localhost:8787 --write
+ronavi patch cursor
+ronavi patch codex
+```
+
+`--always-route` makes the proxy ignore the client's requested model and route every call — the drop-in "just make it cheaper" switch for agents that hardcode a model.
+
 ---
 
 ## Use it #3 — Library (integrate into your project)
@@ -287,12 +308,14 @@ Via the proxy, pass the session through the `X-Session-Id` header (or the OpenAI
 
 - **Decision endpoint** — `POST /v1/route` returns the routing decision (model, provider, tier, task, reason, `pinned`) **without** generating anything. Same body as `/v1/chat/completions`.
 - **Response headers** on every proxied call — `X-Router-Model`, `X-Router-Provider`, `X-Router-Tier`, `X-Router-Task`, `X-Router-Est-Cost`, `X-Router-Pinned`; plus an `x_ronavi` object in the JSON body.
-- **Per-request telemetry** — set `traceFile` to append one JSON line per request (model, tier, task, cost, tokens, latency, pinned), or pass an `onDecision(event)` hook to the `Router` to forward events anywhere (your logger, an OTLP collector, a DB).
+- **Per-request telemetry** — set `traceFile` to append one JSON line per request (model, tier, task, cost, tokens, latency, pinned), or pass an `onDecision(event)` hook to the `Router` to forward events anywhere.
+- **Native OTLP tracing** — set `otlp.endpoint` (or `$RONAVI_OTLP_ENDPOINT`) and roNavi exports each decision as an OTLP/HTTP span (OpenTelemetry GenAI semantic conventions) straight to Honeycomb, Datadog, Grafana, or any OTLP collector — no OpenTelemetry SDK dependency.
 - **Spend/usage** — `ronavi usage` and `router.getUsage()` summarize cost and tokens by model and task.
 
 ```ts
 const router = new Router({
   traceFile: "./ronavi.trace.jsonl",
+  otlp: { endpoint: "https://api.honeycomb.io", headers: { "x-honeycomb-team": process.env.HONEYCOMB_KEY } },
   onDecision: (e) => metrics.record(e), // { model, tier, task, costUSD, latencyMs, pinned, ... }
 });
 ```
@@ -303,6 +326,7 @@ const router = new Router({
 |---|---|---|
 | **Anthropic** | `ANTHROPIC_API_KEY` | Haiku (small) → Sonnet (medium) → Opus (large) |
 | **OpenAI** | `OPENAI_API_KEY` | gpt-4o-mini (small) → gpt-4o (medium) |
+| **Google Gemini** | `GEMINI_API_KEY` | gemini-2.0-flash (small) → 2.5-flash (medium) → 2.5-pro (large) |
 | **OpenRouter** | `OPENROUTER_API_KEY` | Any OpenRouter model (add slugs to the registry) |
 | **Ollama** | runs locally, no key | Free `nano` tier for simple tasks — big token savings |
 

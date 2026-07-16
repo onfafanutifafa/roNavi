@@ -2,7 +2,7 @@
  * Shared types for the roNavi LLM router.
  */
 
-export type ProviderName = "anthropic" | "openai" | "openrouter" | "ollama";
+export type ProviderName = "anthropic" | "openai" | "openrouter" | "ollama" | "google";
 
 /** Cost/capability tier. Ordered cheapest -> most capable. */
 export type Tier = "nano" | "small" | "medium" | "large";
@@ -166,6 +166,17 @@ export interface ProviderCredentials {
   openai?: { apiKey?: string; baseUrl?: string };
   openrouter?: { apiKey?: string; baseUrl?: string };
   ollama?: { enabled?: boolean; baseUrl?: string };
+  google?: { apiKey?: string; baseUrl?: string };
+}
+
+/** OpenTelemetry OTLP/HTTP export target for routing-decision spans. */
+export interface OtlpConfig {
+  /** Base URL of an OTLP/HTTP collector (spans POST to `${endpoint}/v1/traces`). */
+  endpoint: string;
+  /** Extra headers (e.g. an API key for Honeycomb/Datadog/Grafana Cloud). */
+  headers?: Record<string, string>;
+  /** service.name resource attribute (default "ronavi-router"). */
+  serviceName?: string;
 }
 
 export interface PinningConfig {
@@ -198,8 +209,12 @@ export interface RouterConfig {
   pinning?: Partial<PinningConfig>;
   /** Append one JSON line of decision telemetry per request to this file. */
   traceFile?: string | null;
+  /** Export each routing decision as an OTLP/HTTP trace span. */
+  otlp?: OtlpConfig;
   /** Called with a {@link DecisionEvent} after each routed request completes. */
   onDecision?: (event: DecisionEvent) => void;
+  /** Proxy: ignore the client's requested model and always route (treat every request as "auto"). */
+  alwaysRoute?: boolean;
   /** Override the default task -> tier mapping. */
   tierByTask?: Partial<Record<TaskClass, Partial<Record<Complexity, Tier>>>>;
   /** Spend cap + behavior. Omit for no budget enforcement. */

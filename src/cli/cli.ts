@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { Router } from "../router.js";
 import { startProxy, serverAddress } from "../server/proxy.js";
 import { formatUSD, blendedCost } from "../index.js";
@@ -16,7 +19,9 @@ const HELP = `roNavi — LLM router CLI
 Usage:
   ronavi "<prompt>"            Route a prompt to the cheapest capable model and print the answer
   ronavi route "<prompt>"      Show the routing decision only (classify + pick, no generation)
-  ronavi serve                 Start the OpenAI-compatible proxy server
+  ronavi serve                 Start the proxy (OpenAI + Anthropic compatible)
+  ronavi patch <target>        Print config to route a tool through roNavi
+                               (targets: claude-code, cursor, codex, openai)
   ronavi models                List routable models and which providers are configured
   ronavi usage                 Show accumulated usage and spend
 
@@ -29,6 +34,9 @@ Options:
   --temperature <n>   Sampling temperature
   --json              Machine-readable JSON output
   --port <n>          Port for \`serve\` (default 8787 / $RONAVI_PORT)
+  --always-route      \`serve\`: route every request, ignoring the client's model
+  --url <base>        \`patch\`: proxy base URL (default http://localhost:8787)
+  --write             \`patch claude-code\`: write ~/.claude/settings.json
   --config <path>     Path to a JSON config file
   --verbose           Log routing decisions to stderr
   -h, --help          Show this help
@@ -42,7 +50,7 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
 
   if (args.flags["help"] || args.flags["h"]) return void console.log(HELP);
-  if (args.flags["version"]) return void console.log("ronavi 0.2.0");
+  if (args.flags["version"]) return void console.log("ronavi 0.3.0");
 
   const config = {
     verbose: Boolean(args.flags["verbose"]),
@@ -55,6 +63,8 @@ async function main() {
   switch (args.command) {
     case "serve":
       return serve(args);
+    case "patch":
+      return patch(args);
     case "models":
       return models(router, args);
     case "usage":
@@ -104,15 +114,80 @@ async function route(router: Router, args: Args, messages: Message[]) {
 
 async function serve(args: Args) {
   const port = Number(args.flags["port"] ?? process.env.RONAVI_PORT ?? 8787);
-  const router = new Router({ verbose: Boolean(args.flags["verbose"]) });
+  // Only force alwaysRoute when the flag is passed; otherwise defer to config/env.
+  const router = new Router({
+    verbose: Boolean(args.flags["verbose"]),
+    ...(args.flags["always-route"] ? { alwaysRoute: true } : {}),
+  });
+  const alwaysRoute = router.config.alwaysRoute;
   const configured = [...configuredProviders(router.config)];
   const server = await startProxy(port, { router });
   const addr = serverAddress(server) || `http://localhost:${port}`;
   console.log(`roNavi proxy listening on ${addr}`);
-  console.log(`  OpenAI base URL:  ${addr}/v1`);
-  console.log(`  Providers:        ${configured.join(", ") || "(none configured!)"}`);
-  console.log(`  Routable models:  ${router.candidateModels().length}`);
-  console.log(`\nPoint any OpenAI client at ${addr}/v1 and send model "auto".`);
+  console.log(`  OpenAI base URL:     ${addr}/v1   (POST /v1/chat/completions)`);
+  console.log(`  Anthropic base URL:  ${addr}      (POST /v1/messages — for Claude Code)`);
+  console.log(`  Decision endpoint:   ${addr}/v1/route`);
+  console.log(`  Providers:           ${configured.join(", ") || "(none configured!)"}`);
+  console.log(`  Routable models:     ${router.candidateModels().length}`);
+  console.log(`  Always-route:        ${alwaysRoute ? "on" : "off (send model \"auto\" to route)"}`);
+  console.log(`\nWire up a tool:  ronavi patch claude-code --url ${addr}`);
+}
+
+function patch(args: Args) {
+  const target = args.positionals[0] ?? "";
+  const url = (typeof args.flags["url"] === "string" ? args.flags["url"] : "http://localhost:8787").replace(/\/$/, "");
+  const targets = ["claude-code", "cursor", "codex", "openai"];
+  if (!targets.includes(target)) {
+    console.log(`Usage: ronavi patch <${targets.join(" | ")}> [--url ${url}] [--write]\n`);
+    console.log("Start the proxy first (recommended with --always-route so every request is routed):");
+    console.log(`  ronavi serve --always-route\n`);
+    return;
+  }
+
+  if (target === "claude-code") {
+    console.log(`# Claude Code → route all traffic through roNavi.`);
+    console.log(`# roNavi exposes an Anthropic-compatible /v1/messages endpoint, so Claude Code`);
+    console.log(`# works by pointing ANTHROPIC_BASE_URL at the proxy. Run \`ronavi serve --always-route\`.`);
+    console.log(`export ANTHROPIC_BASE_URL=${url}`);
+    console.log(`export ANTHROPIC_API_KEY=ronavi   # any non-empty value; roNavi uses its own provider keys`);
+    if (args.flags["write"]) writeClaudeSettings(url);
+    else console.log(`\n(Add --write to merge these into ~/.claude/settings.json instead.)`);
+    return;
+  }
+
+  const openaiBase = `${url}/v1`;
+  if (target === "cursor") {
+    console.log(`# Cursor → Settings → Models → OpenAI API Key:`);
+    console.log(`#   Override OpenAI Base URL:  ${openaiBase}`);
+    console.log(`#   API Key:                   ronavi   (any non-empty value)`);
+    console.log(`#   Add a custom model named "auto" and enable it.`);
+    return;
+  }
+  // codex / openai (and any OpenAI-compatible CLI, e.g. opencode)
+  console.log(`# ${target === "codex" ? "OpenAI Codex CLI" : "Any OpenAI-compatible client"} → route through roNavi:`);
+  console.log(`export OPENAI_BASE_URL=${openaiBase}`);
+  console.log(`export OPENAI_API_KEY=ronavi   # any non-empty value`);
+  console.log(`# then use model:  auto   (or run \`ronavi serve --always-route\`)`);
+}
+
+function writeClaudeSettings(url: string) {
+  const dir = join(homedir(), ".claude");
+  const file = join(dir, "settings.json");
+  let settings: Record<string, any> = {};
+  if (existsSync(file)) {
+    try {
+      settings = JSON.parse(readFileSync(file, "utf8")) as Record<string, any>;
+    } catch {
+      console.error(`\nCould not parse ${file}; leaving it untouched. Apply the exports above manually.`);
+      return;
+    }
+  } else {
+    mkdirSync(dir, { recursive: true });
+  }
+  settings["env"] = { ...(settings["env"] ?? {}), ANTHROPIC_BASE_URL: url, ANTHROPIC_API_KEY: "ronavi" };
+  writeFileSync(file, JSON.stringify(settings, null, 2) + "\n");
+  console.log(`\n✓ Wrote ANTHROPIC_BASE_URL=${url} to ${file}`);
+  console.log(`  Restart Claude Code, and run \`ronavi serve --always-route\`.`);
 }
 
 function models(router: Router, args: Args) {
@@ -216,7 +291,7 @@ function readStdin(): Promise<string> {
 }
 
 function parseArgs(argv: string[]): Args {
-  const commands = new Set(["serve", "models", "usage", "route"]);
+  const commands = new Set(["serve", "models", "usage", "route", "patch"]);
   const flags: Record<string, string | boolean> = {};
   const positionals: string[] = [];
   let command = "";
@@ -244,7 +319,7 @@ function parseArgs(argv: string[]): Args {
 }
 
 function isBooleanFlag(key: string): boolean {
-  return ["stream", "json", "verbose", "help", "version"].includes(key);
+  return ["stream", "json", "verbose", "help", "version", "always-route", "write"].includes(key);
 }
 
 function pad(s: string, n: number): string {

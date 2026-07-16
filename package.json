@@ -1,6 +1,6 @@
 {
   "name": "ronavi",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Open-source LLM router that classifies each request and routes it to the cheapest capable model — to manage tokens, extend usage, and cut cost. Library + OpenAI-compatible proxy + CLI.",
   "type": "module",
   "license": "MIT",
@@ -11,6 +11,9 @@
     "anthropic",
     "openrouter",
     "ollama",
+    "gemini",
+    "claude-code",
+    "otlp",
     "proxy",
     "cost",
     "tokens",

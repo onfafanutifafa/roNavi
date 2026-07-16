@@ -8,6 +8,7 @@ import type {
   ClassifierMode,
   PinningConfig,
   DecisionEvent,
+  OtlpConfig,
 } from "./types.js";
 
 /**
@@ -27,7 +28,9 @@ export interface ResolvedConfig {
   usageFile: string | null;
   pinning: PinningConfig;
   traceFile: string | null;
+  otlp: OtlpConfig | null;
   onDecision: ((event: DecisionEvent) => void) | null;
+  alwaysRoute: boolean;
   defaultMaxTokens: number;
   verbose: boolean;
 }
@@ -94,7 +97,23 @@ export function resolveConfig(input: RouterConfig = {}): ResolvedConfig {
         env("OLLAMA_BASE_URL") ??
         "http://localhost:11434",
     },
+    google: {
+      apiKey:
+        input.providers?.google?.apiKey ??
+        file.providers?.google?.apiKey ??
+        env("GEMINI_API_KEY") ??
+        env("GOOGLE_API_KEY"),
+      baseUrl:
+        input.providers?.google?.baseUrl ??
+        file.providers?.google?.baseUrl ??
+        "https://generativelanguage.googleapis.com/v1beta/openai",
+    },
   };
+
+  const otlpEndpoint = cfg.otlp?.endpoint ?? env("RONAVI_OTLP_ENDPOINT");
+  const otlp: OtlpConfig | null = otlpEndpoint
+    ? { endpoint: otlpEndpoint, headers: cfg.otlp?.headers, serviceName: cfg.otlp?.serviceName ?? "ronavi-router" }
+    : null;
 
   let budget: BudgetConfig | null = null;
   const budgetInput = cfg.budget;
@@ -125,7 +144,9 @@ export function resolveConfig(input: RouterConfig = {}): ResolvedConfig {
       ttlMs: cfg.pinning?.ttlMs ?? 30 * 60 * 1000,
     },
     traceFile: cfg.traceFile ?? null,
+    otlp,
     onDecision: cfg.onDecision ?? null,
+    alwaysRoute: cfg.alwaysRoute ?? (env("RONAVI_ALWAYS_ROUTE") === "1" || env("RONAVI_ALWAYS_ROUTE") === "true"),
     defaultMaxTokens: cfg.defaultMaxTokens ?? 1024,
     verbose: cfg.verbose ?? false,
   };
@@ -138,5 +159,6 @@ export function configuredProviders(cfg: ResolvedConfig): Set<string> {
   if (cfg.providers.openai.apiKey) set.add("openai");
   if (cfg.providers.openrouter.apiKey) set.add("openrouter");
   if (cfg.providers.ollama.enabled) set.add("ollama");
+  if (cfg.providers.google.apiKey) set.add("google");
   return set;
 }

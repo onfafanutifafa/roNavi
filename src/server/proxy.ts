@@ -1,6 +1,7 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { Router } from "../router.js";
+import { estimateMessagesTokens } from "../tokens.js";
 import type { RouterConfig, Message } from "../types.js";
 
 export interface ProxyOptions {
@@ -43,6 +44,14 @@ export function createProxyServer(opts: ProxyOptions = {}): http.Server {
         }
         return await handleChatCompletion(router, req, res);
       }
+      if (req.method === "POST" && url.pathname === "/v1/messages") {
+        // Anthropic Messages API surface — lets Claude Code / the Anthropic SDK
+        // route through roNavi by pointing ANTHROPIC_BASE_URL here.
+        if (opts.apiKey && !authorizedAnthropic(req, opts.apiKey)) {
+          return json(res, 401, { type: "error", error: { type: "authentication_error", message: "Unauthorized" } });
+        }
+        return await handleAnthropicMessages(router, req, res);
+      }
       return json(res, 404, errorBody(`Unknown route ${req.method} ${url.pathname}`, "invalid_request_error"));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -70,9 +79,8 @@ async function handleChatCompletion(router: Router, req: http.IncomingMessage, r
   }
 
   const requestedModel = typeof body.model === "string" ? body.model : "auto";
-  const isAuto = router.config.autoModelNames.includes(requestedModel) || requestedModel === "";
   const routeOpts = {
-    model: isAuto ? undefined : requestedModel,
+    model: routedModel(router, requestedModel),
     maxTokens: numberOr(body.max_tokens, numberOr(body.max_completion_tokens, undefined)),
     temperature: numberOr(body.temperature, undefined),
     sessionId: sessionIdFrom(req, body),
@@ -140,12 +148,120 @@ async function handleRouteOnly(router: Router, req: http.IncomingMessage, res: h
     return json(res, 400, errorBody("`messages` is required", "invalid_request_error"));
   }
   const requestedModel = typeof body.model === "string" ? body.model : "auto";
-  const isAuto = router.config.autoModelNames.includes(requestedModel) || requestedModel === "";
   const decision = await router.route(messages, {
-    model: isAuto ? undefined : requestedModel,
+    model: routedModel(router, requestedModel),
     sessionId: sessionIdFrom(req, body),
   });
   return json(res, 200, decision);
+}
+
+/** undefined = route (auto); otherwise the explicit model to pin to. */
+function routedModel(router: Router, requestedModel: string): string | undefined {
+  if (router.config.alwaysRoute) return undefined;
+  if (requestedModel === "" || router.config.autoModelNames.includes(requestedModel)) return undefined;
+  return requestedModel;
+}
+
+// ── Anthropic Messages API surface ────────────────────────────────────
+
+async function handleAnthropicMessages(router: Router, req: http.IncomingMessage, res: http.ServerResponse) {
+  const body = await readJson(req);
+  const messages = anthropicToMessages(body);
+  if (messages.length === 0) {
+    return json(res, 400, { type: "error", error: { type: "invalid_request_error", message: "`messages` is required" } });
+  }
+  const requestedModel = typeof body.model === "string" ? body.model : "auto";
+  const routeOpts = {
+    model: routedModel(router, requestedModel),
+    maxTokens: numberOr(body.max_tokens, undefined),
+    temperature: numberOr(body.temperature, undefined),
+    sessionId: sessionIdFrom(req, body),
+  };
+  const stream = body.stream === true;
+  const id = `msg_${randomId()}`;
+
+  if (stream) {
+    const { decision, stream: chunks } = await router.completeStream(messages, routeOpts);
+    setRouterHeaders(res, decision);
+    res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
+    const inputTokens = estimateMessagesTokens(messages);
+    writeAnthropicEvent(res, "message_start", {
+      type: "message_start",
+      message: {
+        id,
+        type: "message",
+        role: "assistant",
+        model: decision.providerModel,
+        content: [],
+        stop_reason: null,
+        stop_sequence: null,
+        usage: { input_tokens: inputTokens, output_tokens: 0 },
+      },
+    });
+    writeAnthropicEvent(res, "content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
+    let outTokens = 0;
+    for await (const c of chunks) {
+      if (c.delta) writeAnthropicEvent(res, "content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: c.delta } });
+      if (c.done && c.usage) outTokens = c.usage.outputTokens;
+    }
+    writeAnthropicEvent(res, "content_block_stop", { type: "content_block_stop", index: 0 });
+    writeAnthropicEvent(res, "message_delta", { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: outTokens } });
+    writeAnthropicEvent(res, "message_stop", { type: "message_stop" });
+    return res.end();
+  }
+
+  const result = await router.complete(messages, routeOpts);
+  setRouterHeaders(res, result.decision);
+  return json(res, 200, {
+    id,
+    type: "message",
+    role: "assistant",
+    model: result.decision.providerModel,
+    content: [{ type: "text", text: result.content }],
+    stop_reason: toAnthropicStop(result.finishReason),
+    stop_sequence: null,
+    usage: { input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens },
+  });
+}
+
+function anthropicToMessages(body: Record<string, any>): Message[] {
+  const out: Message[] = [];
+  if (body.system) out.push({ role: "system", content: anthropicText(body.system) });
+  if (Array.isArray(body.messages)) {
+    for (const m of body.messages) {
+      if (!m || typeof m !== "object") continue;
+      const role = m.role === "assistant" ? "assistant" : "user";
+      out.push({ role, content: anthropicText(m.content) });
+    }
+  }
+  return out;
+}
+
+/** Flatten Anthropic content (string, or an array of blocks) to text. */
+function anthropicText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((b) => (b && typeof b === "object" && (b as any).type === "text" ? String((b as any).text ?? "") : ""))
+      .join("");
+  }
+  return "";
+}
+
+function toAnthropicStop(finishReason: string): string {
+  if (finishReason === "length") return "max_tokens";
+  if (finishReason === "tool_calls") return "tool_use";
+  return "end_turn";
+}
+
+function writeAnthropicEvent(res: http.ServerResponse, event: string, data: unknown) {
+  res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+}
+
+function authorizedAnthropic(req: http.IncomingMessage, key: string): boolean {
+  const apiKey = req.headers["x-api-key"];
+  if (typeof apiKey === "string" && apiKey.trim() === key) return true;
+  return authorized(req, key);
 }
 
 /** Derive a session id from the X-Session-Id header or the OpenAI `user` field. */

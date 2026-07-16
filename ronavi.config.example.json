@@ -19,6 +19,8 @@
 
   "usageFile": "./ronavi.usage.json",
   "traceFile": null,
+  "alwaysRoute": false,
+  "otlpExample": { "$comment": "Set otlp.endpoint to export decisions as OTLP/HTTP spans.", "endpoint": "http://localhost:4318" },
 
   "providers": {
     "ollama": {

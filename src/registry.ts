@@ -104,6 +104,44 @@ export const DEFAULT_MODELS: ModelSpec[] = [
     free: true,
   },
 
+  // ── Google (Gemini, via the OpenAI-compatible endpoint) ─────────────
+  {
+    id: "google:gemini-2.0-flash",
+    provider: "google",
+    model: "gemini-2.0-flash",
+    tier: "small",
+    inputCostPer1M: 0.1,
+    outputCostPer1M: 0.4,
+    contextWindow: 1_000_000,
+    maxOutput: 8_192,
+    strengths: ["simple_qa", "conversation", "classification", "extraction", "summarization", "translation"],
+    supportsJson: true,
+  },
+  {
+    id: "google:gemini-2.5-flash",
+    provider: "google",
+    model: "gemini-2.5-flash",
+    tier: "medium",
+    inputCostPer1M: 0.3,
+    outputCostPer1M: 2.5,
+    contextWindow: 1_000_000,
+    maxOutput: 65_536,
+    strengths: ["code_generation", "summarization", "reasoning", "agentic"],
+    supportsJson: true,
+  },
+  {
+    id: "google:gemini-2.5-pro",
+    provider: "google",
+    model: "gemini-2.5-pro",
+    tier: "large",
+    inputCostPer1M: 1.25,
+    outputCostPer1M: 10.0,
+    contextWindow: 1_000_000,
+    maxOutput: 65_536,
+    strengths: ["reasoning", "math", "code_generation", "code_review", "agentic"],
+    supportsJson: true,
+  },
+
   // ── OpenRouter (one key, many models; some free) ────────────────────
   {
     id: "openrouter:meta-llama/llama-3.3-70b-instruct",

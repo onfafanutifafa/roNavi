@@ -25,6 +25,7 @@ import {
 import { buildProviders, ProviderError, type Provider } from "./providers/index.js";
 import { classify, heuristicClassify } from "./classifier.js";
 import { EmbeddingClassifier, makeEmbedFn } from "./embeddings.js";
+import { createOtlpExporter } from "./otlp.js";
 import { UsageStore, evaluateBudget, BudgetExceededError, type UsageSummary } from "./usage.js";
 import { estimateMessagesTokens, estimateCost, costOf } from "./tokens.js";
 
@@ -108,6 +109,7 @@ export class Router {
   private readonly sessions: SessionStore;
   private embeddingClassifier: EmbeddingClassifier | null = null;
   private embeddingModel: string | null = null;
+  private readonly otlpExport: ((event: DecisionEvent) => void) | null;
 
   constructor(config: RouterConfig = {}) {
     this.config = resolveConfig(config);
@@ -127,6 +129,7 @@ export class Router {
         this.embeddingModel = embed.model;
       }
     }
+    this.otlpExport = this.config.otlp ? createOtlpExporter(this.config.otlp) : null;
   }
 
   /** Models from configured, enabled providers. */
@@ -431,7 +434,7 @@ export class Router {
     opts: RouteOptions,
     actuals: { costUSD: number; usage: { inputTokens: number; outputTokens: number }; latencyMs: number },
   ): void {
-    if (!this.config.onDecision && !this.config.traceFile) return;
+    if (!this.config.onDecision && !this.config.traceFile && !this.otlpExport) return;
     const event: DecisionEvent = {
       ts: Date.now(),
       sessionId: opts.sessionId,
@@ -463,6 +466,7 @@ export class Router {
         /* best-effort */
       }
     }
+    if (this.otlpExport) this.otlpExport(event);
   }
 
   private toDecision(plan: Plan): RouteDecision {
